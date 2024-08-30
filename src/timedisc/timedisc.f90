@@ -47,6 +47,9 @@ USE MOD_Equation_Vars       ,ONLY: StrVarNames
 USE MOD_HDF5_Output         ,ONLY: WriteState
 USE MOD_IO_HDF5             ,ONLY:
 USE MOD_Mesh_Vars           ,ONLY: MeshFile,nGlobalElems
+#if LTS_ENABLED
+USE MOD_Mesh_Vars           ,ONLY: nElems
+#endif
 USE MOD_Output              ,ONLY: Visualize,PrintStatusLine
 USE MOD_Overintegration     ,ONLY: Overintegration
 USE MOD_Overintegration_Vars,ONLY: OverintegrationType
@@ -60,6 +63,9 @@ USE MOD_TimeStep            ,ONLY: TimeStep
 USE MOD_TestCase_Vars       ,ONLY: doTCSource
 USE MOD_TimeDisc_Vars       ,ONLY: iter,iter_analyze,maxIter
 USE MOD_TimeDisc_Vars       ,ONLY: t,tStart,tEnd,dt,tAnalyze
+#if LTS_ENABLED
+USE MOD_TimeDisc_Vars       ,ONLY: t_LTS,dt_LTS
+#endif
 USE MOD_TimeDisc_Vars       ,ONLY: TimeDiscType
 USE MOD_TimeDisc_Vars       ,ONLY: doAnalyze,doFinalize,writeCounter,nCalcTimestep
 USE MOD_TimeDisc_Vars       ,ONLY: time_start
@@ -100,10 +106,22 @@ SWRITE(UNIT_stdOut,'(A13,ES16.7)')'#DOFs/Proc : ',REAL(nGlobalElems*(PP_N+1)**PP
 
 ! Fill correct initial time
 t = MERGE(RestartTime,tStart,DoRestart)
+#if LTS_ENABLED
+!ALLOCATE(t_LTS(nElems))
+!ALLOCATE(dt_LTS(nElems))
+!SWRITE(UNIT_stdOut,'(A13)')'t and dt array for LTS created!'
+t_LTS            = t !Temporary, need to fix (store the whole t_LTS array in output file)
+dt_LTS           = 0.
+!t                = MINVAL(t_LTS)
+!dt               = MINVAL(dt_LTS)
+#endif /*LTS*/
+
+
+
 
 ! NOTE: Set initial variables
 ! t is set in init solution
-tWriteData        = MIN(t+WriteData_dt,tEnd)
+tWriteData        = MIN(t+WriteData_dt,tEnd)  
 tAnalyze          = MIN(t+analyze_dt  ,tEnd)
 iter              = 0
 iter_analyze      = 0
@@ -156,7 +174,7 @@ CALL WriteState(MeshFileName=TRIM(MeshFile),OutputTime=t,FutureTime=tWriteData,i
 CALL Visualize(t,U)
 
 ! No computation needed if tEnd = tStart!
-IF((t.GE.tEnd).OR.maxIter.EQ.0) RETURN
+IF((t.GE.tEnd).OR.(maxIter.EQ.0)) RETURN
 
 ! Run initial analyze
 SWRITE(UNIT_stdOut,'(132("-"))')
@@ -185,6 +203,7 @@ CALL CPU_TIME(time_start)
 DO
   ! Update time step
   CALL UpdateTimeStep()
+  !SWRITE(UNIT_stdOut,'(A)') 'UpdateTimeStep success!'
 
   IF(doCalcTimeAverage) CALL CalcTimeAverage(.FALSE.,dt,t)
   IF(doTCSource)        CALL CalcForcing(t,dt)
@@ -193,12 +212,18 @@ DO
   ! Perform Timestep using a global time stepping routine, attention: only RK3 has time dependent BC
   !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   CALL TimeStep(t)
+  !SWRITE(UNIT_stdOut,'(A)') 'TimeStep success!'
   iter         = iter         + 1
   iter_analyze = iter_analyze + 1
+#if LTS_ENABLED
+  t_LTS        = t_LTS        + dt_LTS
+  t            = MINVAL(t_LTS)
+#else
   t            = t            + dt
-
+#endif /*LTS*/
   ! Perform analysis at the end of the RK loop
   CALL AnalyzeTimeStep()
+  !SWRITE(UNIT_stdOut,'(A)') 'AnalyzeTimeStep success!'
 
   CALL PrintStatusLine(t,dt,tStart,tEnd,iter,maxIter)
 

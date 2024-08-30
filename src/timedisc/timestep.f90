@@ -97,6 +97,9 @@ USE MOD_DG            ,ONLY: DGTimeDerivative_weakForm
 USE MOD_DG_Vars       ,ONLY: U,Ut,nTotalU
 USE MOD_PruettDamping ,ONLY: TempFilterTimeDeriv
 USE MOD_TimeDisc_Vars ,ONLY: dt,Ut_tmp,RKA,RKb,RKc,nRKStages,CurrentStage
+#if LTS_ENABLED
+USE MOD_TimeDisc_Vars ,ONLY: dt_LTS
+#endif
 #if FV_ENABLED
 USE MOD_Indicator     ,ONLY: CalcIndicator
 #endif /*FV_ENABLED*/
@@ -118,10 +121,25 @@ REAL,INTENT(INOUT)  :: t                                     !< current simulati
 REAL     :: b_dt(1:nRKStages)
 REAL     :: tStage
 INTEGER  :: iStage
+#if LTS_ENABLED
+REAL,ALLOCATABLE     :: b_dt_LTS (:,:)
+INTEGER     :: nElems
+INTEGER     :: iElem
+#endif
 !===================================================================================================================================
-
+!WRITE(*,*) 'Timestep type: LSERKW2'
 ! Premultiply with dt
 b_dt = RKb*dt
+
+#if LTS_ENABLED
+nElems = size(dt_LTS)
+ALLOCATE(b_dt_LTS(nRKStages,nElems))
+
+DO iElem=1,nElems
+  b_dt_LTS(:,iElem) = RKb*dt_LTS(iElem)
+END DO
+!WRITE(*,*) 'b_dt_LTS initialization success!'
+#endif /*LTS*/
 
 DO iStage = 1,nRKStages
   ! NOTE: perform timestep in rk
@@ -132,13 +150,23 @@ DO iStage = 1,nRKStages
 
   ! Update gradients
   CALL DGTimeDerivative_weakForm(tStage)
+  !WRITE(*,*) 'DG update success!'
 
   IF (iStage.EQ.1) THEN
     CALL VCopy(nTotalU,Ut_tmp,Ut)                        !Ut_tmp = Ut
   ELSE
     CALL VAXPBY(nTotalU,Ut_tmp,Ut,ConstOut=-RKA(iStage)) !Ut_tmp = Ut - Ut_tmp*RKA (iStage)
   END IF
+#if LTS_ENABLED
+  !WRITE(*,*) "size of U:", size(U(:,:,:,:,1))
+  !WRITE(*,*) "size of nTotalU:", nTotalU
+  DO iElem =1, nElems
+    CALL VAXPBY(nTotalU/nElems,U(:,:,:,:,iElem),Ut_tmp(:,:,:,:,iElem),   ConstIn =b_dt_LTS(iStage,iElem))
+  END DO
+  !WRITE(*,*) 'VAXPBY success!'
+#else
   CALL VAXPBY(nTotalU,U,Ut_tmp,   ConstIn =b_dt(iStage)) !U       = U + Ut_tmp*b_dt(iStage)
+#endif /*LTS*/
 
 #if FV_ENABLED
   ! Time needs to be evaluated at the next step because time integration was already performed
@@ -198,7 +226,10 @@ INTEGER  :: iStage
 ! S1 == U, S2 == S2, S3 == UPrev
 
 ! Premultiply with dt
+#if LTS_ENABLED
+#else
 b_dt = RKb*dt
+#endif
 
 DO iStage = 1,nRKStages
   ! NOTE: perform timestep in rk

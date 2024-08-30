@@ -248,13 +248,21 @@ END SUBROUTINE PrintPercentage
 !==================================================================================================================================
 !> Displays the actual status of the simulation and counts the amount of FV elements
 !==================================================================================================================================
+!#if LTS_ENABLED
+!SUBROUTINE PrintStatusLine(t,dt,t_LTS,dt_LTS,tStart,tEnd,iter,maxIter,doETA)
+!#else
 SUBROUTINE PrintStatusLine(t,dt,tStart,tEnd,iter,maxIter,doETA)
+!#endif
+
 ! MODULES                                                                                                                          !
 USE MOD_Globals
 USE MOD_PreProc
 USE MOD_Output_Vars   ,ONLY: doPrintStatusLine
 USE MOD_Restart_Vars  ,ONLY: DoRestart,RestartTime
 USE MOD_TimeDisc_Vars ,ONLY: time_start
+#if LTS_ENABLED
+USE MOD_TimeDisc_Vars ,ONLY: dt_LTS, t_LTS !Warning: This is not safe for the program, only for test 
+#endif
 #if (FV_ENABLED == 1) || PP_LIMITER
 USE MOD_Mesh_Vars     ,ONLY: nGlobalElems
 #endif
@@ -275,6 +283,10 @@ IMPLICIT NONE
 ! INPUT / OUTPUT VARIABLES
 REAL,INTENT(IN)             :: t      !< current simulation time
 REAL,INTENT(IN)             :: dt     !< current time step
+!#if LTS_ENABLED
+!REAL,INTENT(IN)             :: t_LTS(:)   !current local simulation time
+!REAL,INTENT(IN)             :: dt_LTS(:)  !current local time step
+!#endif 
 REAL,INTENT(IN)             :: tStart !< start time of simulation
 REAL,INTENT(IN)             :: tEnd   !< end time of simulation
 INTEGER(KIND=8),INTENT(IN)  :: iter    !< current iteration
@@ -309,6 +321,12 @@ REAL              :: FV_alpha_range(2)
 INTEGER(KIND=8)   :: PPcounter
 REAL              :: PP_percent
 #endif /*PP_LIMITER*/
+#if LTS_ENABLED
+REAL              :: tmax
+REAL              :: tmin
+REAL              :: dtmax
+REAL              :: dtmin
+#endif /*LTS*/
 !==================================================================================================================================
 #if FV_ENABLED == 1
 FVcounter      = INT(SUM(FV_Elems),KIND=8)
@@ -402,6 +420,31 @@ END IF
 
 IF (.NOT.MPIRoot) RETURN
 
+#if LTS_ENABLED
+WRITE(UNIT_stdOut,'(A,A)', ADVANCE='YES') 'Local time stepping is enabled!', ACHAR(13)
+
+tmin = t
+tmax = MAXVAL(t_LTS)
+dtmin = dt
+dtmax = MAXVAL(dt_LTS)
+
+IF (mins.LT.1 .AND. hours.EQ.0 .AND. days.EQ.0) THEN
+    WRITE(UNIT_stdOut,'(A,E10.4,A,E10.4,A,A)',ADVANCE='YES')                               &
+    '  Minimum local time = ', tmin,'  Minimum  dt = ', dtmin
+    WRITE(UNIT_stdOut,'(A,E10.4,A,E10.4,A,A,A3,A,A1,A,A3,F6.2,A3,A1)',ADVANCE=tmpString)                               &
+    '  Maximum local time = ', tmax,'  Maximum  dt = ', dtmax, ' ', ' ETA [d:h:m]:<1 min remaining',' |',                                          &
+    REPEAT('=',MAX(CEILING(percent*barWidth/100.)-1,0)),'>',REPEAT(' ',barWidth-MAX(CEILING(percent*barWidth/100.),0)),'| [',percent,'%] ',&
+    ACHAR(13) ! ACHAR(13) is carriage return
+  ELSE
+    WRITE(UNIT_stdOut,'(A,E10.4,A,E10.4,A,A)',ADVANCE='YES')                               &
+    '  Minimum local time = ', tmin,'  Minimum  dt = ', dtmin
+    WRITE(UNIT_stdOut,'(A,E10.4,A,E10.4,A,A,I4,A1,I0.2,A1,I0.2,A1,I0.2,A7,A,A1,A,A3,F6.2,A3,A1)',ADVANCE=tmpString)    &
+    '  Maximum local time = ', tmax,'  Maximum  dt = ', dtmax, ' ', ' ETA [d:h:m]',INT(days),':',INT(hours),':',INT(mins),':',INT(secs),' |',      &
+    REPEAT('=',MAX(CEILING(percent*barWidth/100.)-1,0)),'>',REPEAT(' ',barWidth-MAX(CEILING(percent*barWidth/100.),0)),'| [',percent,'%] ',&
+    ACHAR(13) ! ACHAR(13) is carriage return
+END IF
+
+#else
 IF (mins.LT.1 .AND. hours.EQ.0 .AND. days.EQ.0) THEN
     WRITE(UNIT_stdOut,'(A,E10.4,A,E10.4,A,A,A3,A,A1,A,A3,F6.2,A3,A1)',ADVANCE=tmpString)                               &
     '   Time = ', t,'  dt = ', dt, ' ', ' ETA [d:h:m]:<1 min remaining',' |',                                          &
@@ -413,6 +456,8 @@ IF (mins.LT.1 .AND. hours.EQ.0 .AND. days.EQ.0) THEN
     REPEAT('=',MAX(CEILING(percent*barWidth/100.)-1,0)),'>',REPEAT(' ',barWidth-MAX(CEILING(percent*barWidth/100.),0)),'| [',percent,'%] ',&
     ACHAR(13) ! ACHAR(13) is carriage return
 END IF
+#endif
+
 #ifdef INTEL
  CLOSE(UNIT_stdOut)
 #endif /*INTEL*/

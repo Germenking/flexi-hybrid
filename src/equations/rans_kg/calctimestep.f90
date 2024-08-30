@@ -30,6 +30,10 @@ INTERFACE CALCTIMESTEP
   MODULE PROCEDURE CALCTIMESTEP
 END INTERFACE
 
+!INTERFACE CALCTIMESTEP_LTS
+!  MODULE PROCEDURE CALCTIMESTEP_LTS
+!END INTERFACE
+
 INTERFACE FinalizeCalctimestep
   MODULE PROCEDURE FinalizeCalctimestep
 END INTERFACE
@@ -95,7 +99,7 @@ END SUBROUTINE
 !==================================================================================================================================
 !> Compute the time step for the current update of U for the NS-kg Equations
 !==================================================================================================================================
-FUNCTION CALCTIMESTEP(errType)
+FUNCTION CALCTIMESTEP(errType) 
 ! MODULES
 USE MOD_Globals
 USE MOD_PreProc
@@ -103,6 +107,9 @@ USE MOD_DG_Vars      ,ONLY:U
 USE MOD_EOS_Vars
 USE MOD_Mesh_Vars    ,ONLY:sJ,Metrics_fTilde,Metrics_gTilde,Elem_xGP,nElems
 USE MOD_TimeDisc_Vars,ONLY:CFLScale,ViscousTimeStep,dtElem
+!#if LTS_ENABLED
+!USE MOD_Mesh_Vars    ,ONLY:dt_LTS
+!#endif
 USE MOD_Equation_Vars,ONLY:Cmu,invSigmaK
 #ifndef GNU
 USE, INTRINSIC :: IEEE_ARITHMETIC,ONLY:IEEE_IS_NAN
@@ -127,7 +134,7 @@ USE MOD_EddyVisc_Vars, ONLY: muSGS, PrSGS
 IMPLICIT NONE
 !----------------------------------------------------------------------------------------------------------------------------------
 ! INPUT/OUTPUT VARIABLES
-REAL                         :: CalcTimeStep
+REAL,ALLOCATABLE             :: CalcTimeStep(:)
 INTEGER,INTENT(OUT)          :: errType
 !----------------------------------------------------------------------------------------------------------------------------------
 ! LOCAL VARIABLES
@@ -146,9 +153,20 @@ REAL                         :: muTOrig
 !==================================================================================================================================
 errType=0
 
+#if LTS_ENABLED
+ALLOCATE (CalcTimeStep(nElems))
+#else
+ALLOCATE (CalcTimeStep(1))
+#endif /*LTS*/
+
 TimeStepConv=HUGE(1.)
 TimeStepVisc=HUGE(1.)
 DO iElem=1,nElems
+#if LTS_ENABLED  
+  TimeStepConv=HUGE(1.)
+  TimeStepVisc=HUGE(1.)
+#endif /*LTS*/
+!if LTS_ENABLED, update the time step for each element
   FVE = FV_Elems(iElem)
   Max_Lambda=0.
 #if PARABOLIC
@@ -224,8 +242,22 @@ DO iElem=1,nElems
   END IF
 #endif /* PARABOLIC*/
 
+#if LTS_ENABLED
+  TimeStep(1)=TimeStepConv
+  TimeStep(2)=TimeStepVisc
+#if USE_MPI
+  TimeStep(3)=-errType ! reduce with timestep, minus due to MPI_MIN
+  CALL MPI_ALLREDUCE(MPI_IN_PLACE,TimeStep,3,MPI_DOUBLE_PRECISION,MPI_MIN,MPI_COMM_FLEXI,iError)
+  errType=INT(-TimeStep(3))
+#endif /*USE_MPI*/
+  IF (.NOT.ViscousTimeStep)THEN
+    ViscousTimeStep=(TimeStep(2) .LT. TimeStep(1))
+  ENDIF
+  CalcTimeStep(iElem)=MINVAL(TimeStep(1:2))
+#endif /*LTS*/
 END DO ! iElem=1,nElems
 
+#ifndef LTS_ENABLED
 TimeStep(1)=TimeStepConv
 TimeStep(2)=TimeStepVisc
 #if USE_MPI
@@ -234,9 +266,13 @@ CALL MPI_ALLREDUCE(MPI_IN_PLACE,TimeStep,3,MPI_DOUBLE_PRECISION,MPI_MIN,MPI_COMM
 errType=INT(-TimeStep(3))
 #endif /*USE_MPI*/
 ViscousTimeStep=(TimeStep(2) .LT. TimeStep(1))
-CalcTimeStep=MINVAL(TimeStep(1:2))
+CalcTimeStep(1)=MINVAL(TimeStep(1:2)) ! CalcTimeStep only has 1 elemnt in the array without LTS function
+#endif /*no_LTS*/
+
 
 END FUNCTION CALCTIMESTEP
+
+
 
 
 !==================================================================================================================================

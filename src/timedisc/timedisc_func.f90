@@ -37,6 +37,10 @@ INTERFACE UpdateTimeStep
   MODULE PROCEDURE UpdateTimeStep
 END INTERFACE
 
+!INTERFACE UpdateTimeStep_LTS
+!  MODULE PROCEDURE UpdateTimeStep_LTS
+!END INTERFACE
+
 INTERFACE AnalyzeTimeStep
   MODULE PROCEDURE AnalyzeTimeStep
 END INTERFACE
@@ -104,6 +108,9 @@ USE MOD_ReadInTools         ,ONLY: GETREAL,GETINT,GETSTR
 USE MOD_StringTools         ,ONLY: LowCase,StripSpaces
 USE MOD_TimeDisc_Vars       ,ONLY: CFLScale
 USE MOD_TimeDisc_Vars       ,ONLY: dtElem,dt,tend,tStart,dt_dynmin,dt_kill
+#if LTS_ENABLED
+USE MOD_TimeDisc_Vars       ,ONLY: dt_LTS,t_LTS
+#endif 
 USE MOD_TimeDisc_Vars       ,ONLY: Ut_tmp,UPrev,S2
 USE MOD_TimeDisc_Vars       ,ONLY: maxIter,nCalcTimeStepMax
 USE MOD_TimeDisc_Vars       ,ONLY: SetTimeDiscCoefs,TimeDiscName,TimeDiscMethod,TimeDiscType,TimeDiscInitIsDone
@@ -119,6 +126,8 @@ IMPLICIT NONE
 ! LOCAL VARIABLES
 INTEGER           :: NEff
 !==================================================================================================================================
+
+
 IF(TimeDiscInitIsDone)THEN
   SWRITE(UNIT_stdOut,'(A)') "InitTimeDisc already called."
   RETURN
@@ -174,11 +183,18 @@ dt_dynmin = GETREAL("dtmin")
 dt_kill   = GETREAL("dtkill")
 
 ! Set timestep to a large number
+#if LTS_ENABLED
+ALLOCATE(t_LTS(nElems))
+ALLOCATE(dt_LTS(nElems))
+SWRITE(UNIT_stdOut,'(A)')'t and dt array for LTS created!'
+dt_LTS =HUGE(1.)
+#endif /*LTS*/
 dt=HUGE(1.)
 
 ! Allocate and Initialize elementwise dt array
 ALLOCATE(dtElem(nElems))
 dtElem=0.
+
 
 CALL AddToElemData(ElementOut,'dt',dtElem)
 
@@ -197,6 +213,9 @@ SUBROUTINE InitTimeStep()
 ! MODULES
 USE MOD_Globals
 USE MOD_TimeDisc_Vars       ,ONLY: t,tAnalyze,tEnd,dt,dt_min,dt_minOld
+#if LTS_ENABLED
+USE MOD_TimeDisc_Vars       ,ONLY: t_LTS,dt_LTS
+#endif
 USE MOD_TimeDisc_Vars       ,ONLY: ViscousTimeStep,CalcTimeStart,nCalcTimeStep
 USE MOD_TimeDisc_Vars       ,ONLY: doAnalyze,doFinalize
 ! IMPLICIT VARIABLE HANDLING
@@ -207,15 +226,40 @@ IMPLICIT NONE
 ! LOCAL VARIABLES
 INTEGER                      :: errType
 !===================================================================================================================================
-dt                 = EvalInitialTimeStep(errType)
+#if LTS_ENABLED
+!ALLOCATE(dt_LTS(nElems))
+dt_LTS             = EvalInitialTimeStep(errType)
+dt                 = MINVAL(dt_LTS)
+#else
+dt                 = MINVAL(EvalInitialTimeStep(errType)) !OUTPUT of EvalInitialTimeStep is an array with 1 element without LTS function
+#endif /*LTS*/
+
+
 dt_min(DT_MIN)     = dt
 dt_min(DT_ANALYZE) = tAnalyze-t             ! Time to next analysis, put in extra variable so number does not change due to numerical errors
 dt_min(DT_END)     = tEnd    -t             ! Do the same for end time
-dt                 = MINVAL(dt_min)
+dt                 = MINVAL(dt_min)         
+#if LTS_ENABLED
+dt_LTS             = dt                     ! Whether LTS is enabled or not, let the first time step be the smallest one 
+#endif /*LTS*/
 
 IF (dt.EQ.dt_min(DT_ANALYZE))       doAnalyze  = .TRUE.
 IF (dt.EQ.dt_min(DT_END    )) THEN; doAnalyze  = .TRUE.; doFinalize = .TRUE.; END IF
 dt                 = MINVAL(dt_min,MASK=dt_min.GT.0)
+
+
+
+
+!dt_min(DT_MIN)     = dt
+!dt_min(DT_ANALYZE) = tAnalyze-t             ! Time to next analysis, put in extra variable so number does not change due to numerical errors
+!dt_min(DT_END)     = tEnd    -t             ! Do the same for end time
+!dt                 = MINVAL(dt_min)
+
+!IF (dt.EQ.dt_min(DT_ANALYZE))       doAnalyze  = .TRUE.
+!IF (dt.EQ.dt_min(DT_END    )) THEN; doAnalyze  = .TRUE.; doFinalize = .TRUE.; END IF
+!dt                 = MINVAL(dt_min,MASK=dt_min.GT.0)
+
+
 
 nCalcTimeStep = 0
 dt_minOld     = -999.
@@ -244,6 +288,10 @@ USE MOD_Globals
 USE MOD_Analyze_Vars        ,ONLY: tWriteData
 USE MOD_HDF5_Output         ,ONLY: WriteState
 USE MOD_Mesh_Vars           ,ONLY: MeshFile
+#if LTS_ENABLED
+USE MOD_Mesh_Vars           ,ONLY: nElems
+USE MOD_TimeDisc_Vars       ,ONLY: t_LTS,dt_LTS
+#endif /*LTS*/
 USE MOD_TimeDisc_Vars       ,ONLY: t,tAnalyze,tEnd,dt,dt_min,dt_minOld
 USE MOD_TimeDisc_Vars       ,ONLY: nCalcTimeStep,nCalcTimeStepMax
 USE MOD_TimeDisc_Vars       ,ONLY: doAnalyze,doFinalize
@@ -254,6 +302,9 @@ IMPLICIT NONE
 !-----------------------------------------------------------------------------------------------------------------------------------
 ! LOCAL VARIABLES
 INTEGER                      :: errType
+#if LTS_ENABLED
+INTEGER                      :: iElem
+#endif /*LTS*/
 !===================================================================================================================================
 
 ! Return if no timestep update requested in this iteration
@@ -262,14 +313,25 @@ IF (nCalcTimeStep.GE.1) THEN
   RETURN
 END IF
 
-dt_min(DT_MIN)     = EvalTimeStep(errType)
+#if LTS_ENABLED
+dt_LTS             = EvalTimeStep(errType)
+dt                 = MINVAL(dt_LTS)
+#else
+dt                 = MINVAL(EvalTimeStep(errType))       !OUTPUT of EvalInitialTimeStep is an array with 1 element without LTS function
+#endif /*LTS*/
+
+dt_min(DT_MIN)     = dt
 dt_min(DT_ANALYZE) = tAnalyze-t             ! Time to next analysis, put in extra variable so number does not change due to numerical errors
 dt_min(DT_END)     = tEnd    -t             ! Do the same for end time
-dt                 = MINVAL(dt_min)
+
 
 IF (dt.EQ.dt_min(DT_ANALYZE))       doAnalyze  = .TRUE.
 IF (dt.EQ.dt_min(DT_END    )) THEN; doAnalyze  = .TRUE.; doFinalize = .TRUE.; END IF
 dt                 = MINVAL(dt_min,MASK=dt_min.GT.0)
+#if LTS_ENABLED
+IF ((dt_min(DT_ANALYZE).LT.dt_min(DT_MIN)).OR.(dt_min(DT_END).LT.dt_min(DT_MIN))) dt_LTS  =  dt 
+#endif /*LTS*/
+
 
 nCalcTimeStep = MIN(FLOOR(ABS(LOG10(ABS(dt_minOld/dt-1.)**2.*100.+EPSILON(0.)))),nCalcTimeStepMax) - 1
 dt_minOld     = dt
@@ -284,9 +346,22 @@ IF (errType.NE.0) THEN
 END IF
 
 ! Increase time step if the NEXT time step would be smaller than dt/100
-IF(dt_min(DT_ANALYZE)-dt.LT.dt/100.0 .AND. dt_min(DT_ANALYZE).GT.0) THEN; dt = dt_min(DT_ANALYZE); doAnalyze  = .TRUE.; END IF
+IF(dt_min(DT_ANALYZE)-dt.LT.dt/100.0 .AND. dt_min(DT_ANALYZE).GT.0) THEN
+  dt = dt_min(DT_ANALYZE)
+#if LTS_ENABLED
+  dt_LTS     = dt
+#endif /*LTS*/
+  doAnalyze  = .TRUE.
+END IF
 ! Increase time step if the LAST time step would be smaller than dt/100
-IF(    dt_min(DT_END)-dt.LT.dt/100.0 .AND. dt_min(DT_END    ).GT.0) THEN; dt = dt_min(DT_END)    ; doAnalyze  = .TRUE.; doFinalize = .TRUE.; END IF
+IF(    dt_min(DT_END)-dt.LT.dt/100.0 .AND. dt_min(DT_END    ).GT.0) THEN
+  dt = dt_min(DT_END) 
+#if LTS_ENABLED
+  dt_LTS     = dt
+#endif   /*LTS*/
+  doAnalyze  = .TRUE.
+  doFinalize = .TRUE.
+END IF
 
 END SUBROUTINE UpdateTimeStep
 
@@ -316,6 +391,9 @@ USE MOD_TestCase            ,ONLY: AnalyzeTestCase
 USE MOD_TestCase_Vars       ,ONLY: nAnalyzeTestCase
 USE MOD_TimeAverage         ,ONLY: CalcTimeAverage
 USE MOD_TimeDisc_Vars       ,ONLY: t,dt,dt_min,tAnalyze,iter_analyze,nRKStages,tEnd
+#if LTS_ENABLED
+USE MOD_TimeDisc_Vars       ,ONLY: t_LTS,dt_LTS
+#endif 
 USE MOD_TimeDisc_Vars       ,ONLY: iter,iter_analyze,maxIter
 USE MOD_TimeDisc_Vars       ,ONLY: doAnalyze,doFinalize,writeCounter
 USE MOD_Restart_Vars        ,ONLY: RestartTime,RestartWallTime
@@ -409,18 +487,22 @@ END IF
 END SUBROUTINE AnalyzeTimeStep
 
 !==================================================================================================================================
-!> Evaluates the initial time step for the current update of U
+!> Evaluates the initial time step for the current update of U. OUTPUT is an array!
 !==================================================================================================================================
-FUNCTION EvalInitialTimeStep(errType) RESULT(dt)
+FUNCTION EvalInitialTimeStep(errType) RESULT(dt) 
 ! MODULES
 USE MOD_Globals
 USE MOD_CalcTimeStep        ,ONLY: CalcTimeStep
 USE MOD_TimeDisc_Vars       ,ONLY: dt_kill,dt_dynmin,dt_analyzemin,dtElem,nDtLimited
+#if LTS_ENABLED
+USE MOD_Mesh_Vars           ,ONLY: nElems
+#endif 
 ! IMPLICIT VARIABLE HANDLING
 IMPLICIT NONE
 !----------------------------------------------------------------------------------------------------------------------------------
 ! INPUT/OUTPUT VARIABLES
-REAL                         :: dt
+REAL,ALLOCATABLE             :: dt(:)
+REAL                         :: dt_min = 0.
 INTEGER,INTENT(OUT)          :: errType
 !----------------------------------------------------------------------------------------------------------------------------------
 ! LOCAL VARIABLES
@@ -430,45 +512,78 @@ dt_analyzemin = HUGE(1.)
 ! Initially set nDtLimited
 nDtLimited    = 0
 
-dt            = CalcTimeStep(errType)
-dt_analyzemin = MIN(dt_analyzemin,dt)
-IF (dt.LT.dt_dynmin) THEN
+#if LTS_ENABLED
+ALLOCATE(dt(nELems))         
+#else
+ALLOCATE(dt(1))
+#endif /*LTS*/
+
+#if EQNSYSNR==4
+dt            = CalcTimeStep(errType)  !output of CalcTimeStep is an array for RANS kg system
+#else
+dt(1)         = CalcTimeStep(errType)  !output of CalcTimeStep is a variable for other systems
+#endif  /*RANS_kg*/
+!Only CalcTimeStep of RANS kg system outputs an array  
+
+dt_min        = MINVAL(dt)
+
+dt_analyzemin = MIN(dt_analyzemin,dt_min)
+IF (dt_min.LT.dt_dynmin) THEN
   CALL PrintWarning("TimeDisc INFO - Timestep dropped below predefined minimum! - LIMITING!")
   dt = dt_dynmin;   dtElem = dt_dynmin
   nDtLimited  = nDtLimited + 1
 END IF
-IF (dt.LT.dt_kill) &
+IF (dt_min.LT.dt_kill) THEN
   CALL Abort(__STAMP__,"TimeDisc ERROR - Initial timestep below critical kill timestep!")
+END IF
 END FUNCTION EvalInitialTimeStep
 
 
 !==================================================================================================================================
 !> Evaluates the time step for the current update of U
 !==================================================================================================================================
-FUNCTION EvalTimeStep(errType) RESULT(dt_Min)
+FUNCTION EvalTimeStep(errType) RESULT(dt)
 ! MODULES
 USE MOD_Globals
 USE MOD_Analyze_Vars        ,ONLY: tWriteData
 USE MOD_CalcTimeStep        ,ONLY: CalcTimeStep
 USE MOD_HDF5_Output         ,ONLY: WriteState
 USE MOD_Mesh_Vars           ,ONLY: MeshFile
+#if LTS_ENABLED
+USE MOD_Mesh_Vars           ,ONLY: nElems
+#endif
 USE MOD_TimeDisc_Vars       ,ONLY: dt_kill,dt_dynmin,t,dt_analyzemin,dtElem,nDtLimited
 ! IMPLICIT VARIABLE HANDLING
 IMPLICIT NONE
 !----------------------------------------------------------------------------------------------------------------------------------
 ! INPUT/OUTPUT VARIABLES
-REAL                         :: dt_Min
+REAL,ALLOCATABLE             :: dt(:)
+REAL                         :: dt_min
 INTEGER,INTENT(OUT)          :: errType
 !----------------------------------------------------------------------------------------------------------------------------------
 ! LOCAL VARIABLES
 !==================================================================================================================================
-dt_Min        = CalcTimeStep(errType)
-dt_analyzemin = MIN(dt_analyzemin,dt_Min)
-IF (dt_Min.LT.dt_dynmin) THEN
-  dt_Min = dt_dynmin;   dtElem = dt_dynmin
+#if LTS_ENABLED
+ALLOCATE(dt(nELems))
+#else
+ALLOCATE(dt(1))
+#endif /*LTS*/
+
+#if EQNSYSNR==4
+dt            = CalcTimeStep(errType)  !output of CalcTimeStep is an array for RANS kg system
+#else
+dt(1)         = CalcTimeStep(errType)  !output of CalcTimeStep is a variable for other systems
+#endif  /*RANS_kg*/
+!Only CalcTimeStep of RANS kg system outputs an array
+
+dt_min        = MINVAL(dt)
+
+dt_analyzemin = MIN(dt_analyzemin,dt_min)
+IF (dt_min.LT.dt_dynmin) THEN
+  dt = dt_dynmin;   dtElem = dt_dynmin
   nDtLimited  = nDtLimited + 1
 END IF
-IF (dt_Min.LT.dt_kill) THEN
+IF (dt_min.LT.dt_kill) THEN
   CALL WriteState(MeshFileName=TRIM(MeshFile),OutputTime=t,&
                   FutureTime=tWriteData,isErrorFile=.TRUE.)
   CALL Abort(__STAMP__,&

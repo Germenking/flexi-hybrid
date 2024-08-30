@@ -28,7 +28,12 @@ END INTERFACE
 !----------------------------------------------------------------------------------------------------------------------------------
 ! GLOBAL VARIABLES
 !----------------------------------------------------------------------------------------------------------------------------------
-REAL              ::time_start                         !< start time of the timedisc
+REAL             ::time_start                          !< start time of the timedisc
+
+#if LTS_ENABLED
+REAL,ALLOCATABLE :: t_LTS(:)                           !< curreent physical time (LTS enabled)
+REAL,ALLOCATABLE :: dt_LTS(:)                          !< current local time step
+#endif                       
 REAL             :: t  = 0.                            !< current physical time
 REAL             :: dt = 0.                            !< current timestep
 REAL             :: dt_old                             !< last timestep
