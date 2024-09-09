@@ -33,6 +33,10 @@ REAL             ::time_start                          !< start time of the time
 #if LTS_ENABLED
 REAL,ALLOCATABLE :: t_LTS(:)                           !< curreent physical time (LTS enabled)
 REAL,ALLOCATABLE :: dt_LTS(:)                          !< current local time step
+REAL             :: t_LTS_min = 0.
+REAL             :: t_LTS_max = 0.
+REAL             :: dt_LTS_min = 0.
+REAL             :: dt_LTS_max = 0.
 #endif                       
 REAL             :: t  = 0.                            !< current physical time
 REAL             :: dt = 0.                            !< current timestep

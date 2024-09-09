@@ -214,7 +214,7 @@ SUBROUTINE InitTimeStep()
 USE MOD_Globals
 USE MOD_TimeDisc_Vars       ,ONLY: t,tAnalyze,tEnd,dt,dt_min,dt_minOld
 #if LTS_ENABLED
-USE MOD_TimeDisc_Vars       ,ONLY: t_LTS,dt_LTS
+USE MOD_TimeDisc_Vars       ,ONLY: t_LTS,dt_LTS,dt_LTS_min
 #endif
 USE MOD_TimeDisc_Vars       ,ONLY: ViscousTimeStep,CalcTimeStart,nCalcTimeStep
 USE MOD_TimeDisc_Vars       ,ONLY: doAnalyze,doFinalize
@@ -229,7 +229,9 @@ INTEGER                      :: errType
 #if LTS_ENABLED
 !ALLOCATE(dt_LTS(nElems))
 dt_LTS             = EvalInitialTimeStep(errType)
-dt                 = MINVAL(dt_LTS)
+dt_LTS_min         = MINVAL(dt_LTS)
+CALL MPI_ALLREDUCE(MPI_IN_PLACE,dt_LTS_min,1,MPI_DOUBLE_PRECISION,MPI_MIN,MPI_COMM_FLEXI,iError)
+dt                 = dt_LTS_min
 #else
 dt                 = MINVAL(EvalInitialTimeStep(errType)) !OUTPUT of EvalInitialTimeStep is an array with 1 element without LTS function
 #endif /*LTS*/
@@ -241,12 +243,13 @@ dt_min(DT_END)     = tEnd    -t             ! Do the same for end time
 dt                 = MINVAL(dt_min)         
 #if LTS_ENABLED
 dt_LTS             = dt                     ! Whether LTS is enabled or not, let the first time step be the smallest one 
+!WRITE(UNIT_stdOut,'(A)') ' dt_LTS update done! '
 #endif /*LTS*/
 
 IF (dt.EQ.dt_min(DT_ANALYZE))       doAnalyze  = .TRUE.
 IF (dt.EQ.dt_min(DT_END    )) THEN; doAnalyze  = .TRUE.; doFinalize = .TRUE.; END IF
 dt                 = MINVAL(dt_min,MASK=dt_min.GT.0)
-
+!WRITE(UNIT_stdOut,'(A)') ' Initial time step done! '
 
 
 
@@ -290,7 +293,7 @@ USE MOD_HDF5_Output         ,ONLY: WriteState
 USE MOD_Mesh_Vars           ,ONLY: MeshFile
 #if LTS_ENABLED
 USE MOD_Mesh_Vars           ,ONLY: nElems
-USE MOD_TimeDisc_Vars       ,ONLY: t_LTS,dt_LTS
+USE MOD_TimeDisc_Vars       ,ONLY: t_LTS,dt_LTS, dt_LTS_min
 #endif /*LTS*/
 USE MOD_TimeDisc_Vars       ,ONLY: t,tAnalyze,tEnd,dt,dt_min,dt_minOld
 USE MOD_TimeDisc_Vars       ,ONLY: nCalcTimeStep,nCalcTimeStepMax
@@ -315,7 +318,10 @@ END IF
 
 #if LTS_ENABLED
 dt_LTS             = EvalTimeStep(errType)
-dt                 = MINVAL(dt_LTS)
+dt_LTS_min         = MINVAL(dt_LTS)
+CALL MPI_ALLREDUCE(MPI_IN_PLACE,dt_LTS_min,1,MPI_DOUBLE_PRECISION,MPI_MIN,MPI_COMM_FLEXI,iError)
+dt                 = dt_LTS_min
+!WRITE(*,*) 'LTS initial dt done!'
 #else
 dt                 = MINVAL(EvalTimeStep(errType))       !OUTPUT of EvalInitialTimeStep is an array with 1 element without LTS function
 #endif /*LTS*/

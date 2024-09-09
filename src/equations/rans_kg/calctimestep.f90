@@ -153,6 +153,8 @@ REAL                         :: muTOrig
 !==================================================================================================================================
 errType=0
 
+!WRITE(*,*) 'Calctimestep starts!'
+
 #if LTS_ENABLED
 ALLOCATE (CalcTimeStep(nElems))
 #else
@@ -246,16 +248,23 @@ DO iElem=1,nElems
   TimeStep(1)=TimeStepConv
   TimeStep(2)=TimeStepVisc
 #if USE_MPI
-  TimeStep(3)=-errType ! reduce with timestep, minus due to MPI_MIN
-  CALL MPI_ALLREDUCE(MPI_IN_PLACE,TimeStep,3,MPI_DOUBLE_PRECISION,MPI_MIN,MPI_COMM_FLEXI,iError)
-  errType=INT(-TimeStep(3))
+  TimeStep(3)=-errType
 #endif /*USE_MPI*/
   IF (.NOT.ViscousTimeStep)THEN
     ViscousTimeStep=(TimeStep(2) .LT. TimeStep(1))
   ENDIF
   CalcTimeStep(iElem)=MINVAL(TimeStep(1:2))
 #endif /*LTS*/
+
 END DO ! iElem=1,nElems
+
+!WRITE(*,*) 'Calctimestep cycle ends!'
+
+#if LTS_ENABLED
+CALL MPI_ALLREDUCE(MPI_IN_PLACE, TimeStep(3), 1, MPI_DOUBLE_PRECISION, MPI_MIN, MPI_COMM_FLEXI, iError)
+errType=INT(-TimeStep(3))
+!WRITE(*,*) 'errType updated!'
+#endif /*LTS*/
 
 #ifndef LTS_ENABLED
 TimeStep(1)=TimeStepConv
@@ -268,6 +277,9 @@ errType=INT(-TimeStep(3))
 ViscousTimeStep=(TimeStep(2) .LT. TimeStep(1))
 CalcTimeStep(1)=MINVAL(TimeStep(1:2)) ! CalcTimeStep only has 1 elemnt in the array without LTS function
 #endif /*no_LTS*/
+
+
+
 
 
 END FUNCTION CALCTIMESTEP

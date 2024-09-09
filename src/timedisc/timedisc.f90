@@ -64,7 +64,7 @@ USE MOD_TestCase_Vars       ,ONLY: doTCSource
 USE MOD_TimeDisc_Vars       ,ONLY: iter,iter_analyze,maxIter
 USE MOD_TimeDisc_Vars       ,ONLY: t,tStart,tEnd,dt,tAnalyze
 #if LTS_ENABLED
-USE MOD_TimeDisc_Vars       ,ONLY: t_LTS,dt_LTS
+USE MOD_TimeDisc_Vars       ,ONLY: t_LTS,dt_LTS,dt_LTS_min,t_LTS_min
 #endif
 USE MOD_TimeDisc_Vars       ,ONLY: TimeDiscType
 USE MOD_TimeDisc_Vars       ,ONLY: doAnalyze,doFinalize,writeCounter,nCalcTimestep
@@ -114,6 +114,7 @@ t_LTS            = t !Temporary, need to fix (store the whole t_LTS array in out
 dt_LTS           = 0.
 !t                = MINVAL(t_LTS)
 !dt               = MINVAL(dt_LTS)
+!WRITE(*,*) 'nElems:', nElems
 #endif /*LTS*/
 
 
@@ -201,6 +202,7 @@ CALL CPU_TIME(time_start)
 
 ! Run computation
 DO
+  !SWRITE(UNIT_stdOut,'(A)') 'Time iteration starts!'
   ! Update time step
   CALL UpdateTimeStep()
   !SWRITE(UNIT_stdOut,'(A)') 'UpdateTimeStep success!'
@@ -217,7 +219,10 @@ DO
   iter_analyze = iter_analyze + 1
 #if LTS_ENABLED
   t_LTS        = t_LTS        + dt_LTS
-  t            = MINVAL(t_LTS)
+  t_LTS_min    = MINVAL(t_LTS)
+  CALL MPI_ALLREDUCE(MPI_IN_PLACE,t_LTS_min,1,MPI_DOUBLE_PRECISION,MPI_MIN,MPI_COMM_FLEXI,iError)
+  t            = t_LTS_min
+  !SWRITE(UNIT_stdOut,'(A)') 'Time Update success!'
 #else
   t            = t            + dt
 #endif /*LTS*/
@@ -228,6 +233,7 @@ DO
   CALL PrintStatusLine(t,dt,tStart,tEnd,iter,maxIter)
 
   IF(doFinalize) EXIT
+  !SWRITE(UNIT_stdOut,'(A)') 'RK cycle success!'
 END DO
 
 END SUBROUTINE TimeDisc
