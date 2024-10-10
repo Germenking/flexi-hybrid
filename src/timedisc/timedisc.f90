@@ -64,7 +64,7 @@ USE MOD_TestCase_Vars       ,ONLY: doTCSource
 USE MOD_TimeDisc_Vars       ,ONLY: iter,iter_analyze,maxIter
 USE MOD_TimeDisc_Vars       ,ONLY: t,tStart,tEnd,dt,tAnalyze
 #if LTS_ENABLED
-USE MOD_TimeDisc_Vars       ,ONLY: t_LTS,dt_LTS,dt_LTS_min,t_LTS_min
+USE MOD_TimeDisc_Vars       ,ONLY: t_LTS,dt_LTS,dt_LTS_min,dt_LTS_max,t_LTS_min,t_LTS_max
 #endif
 USE MOD_TimeDisc_Vars       ,ONLY: TimeDiscType
 USE MOD_TimeDisc_Vars       ,ONLY: doAnalyze,doFinalize,writeCounter,nCalcTimestep
@@ -107,9 +107,6 @@ SWRITE(UNIT_stdOut,'(A13,ES16.7)')'#DOFs/Proc : ',REAL(nGlobalElems*(PP_N+1)**PP
 ! Fill correct initial time
 t = MERGE(RestartTime,tStart,DoRestart)
 #if LTS_ENABLED
-!ALLOCATE(t_LTS(nElems))
-!ALLOCATE(dt_LTS(nElems))
-!SWRITE(UNIT_stdOut,'(A13)')'t and dt array for LTS created!'
 t_LTS            = t !Temporary, need to fix (store the whole t_LTS array in output file)
 dt_LTS           = 0.
 !t                = MINVAL(t_LTS)
@@ -202,10 +199,8 @@ CALL CPU_TIME(time_start)
 
 ! Run computation
 DO
-  !SWRITE(UNIT_stdOut,'(A)') 'Time iteration starts!'
   ! Update time step
   CALL UpdateTimeStep()
-  !SWRITE(UNIT_stdOut,'(A)') 'UpdateTimeStep success!'
 
   IF(doCalcTimeAverage) CALL CalcTimeAverage(.FALSE.,dt,t)
   IF(doTCSource)        CALL CalcForcing(t,dt)
@@ -214,26 +209,28 @@ DO
   ! Perform Timestep using a global time stepping routine, attention: only RK3 has time dependent BC
   !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   CALL TimeStep(t)
-  !SWRITE(UNIT_stdOut,'(A)') 'TimeStep success!'
   iter         = iter         + 1
   iter_analyze = iter_analyze + 1
 #if LTS_ENABLED
   t_LTS        = t_LTS        + dt_LTS
   t_LTS_min    = MINVAL(t_LTS)
+  t_LTS_max    = MAXVAL(t_LTS)
   CALL MPI_ALLREDUCE(MPI_IN_PLACE,t_LTS_min,1,MPI_DOUBLE_PRECISION,MPI_MIN,MPI_COMM_FLEXI,iError)
+  CALL MPI_ALLREDUCE(MPI_IN_PLACE,t_LTS_max,1,MPI_DOUBLE_PRECISION,MPI_MAX,MPI_COMM_FLEXI,iError)
   t            = t_LTS_min
-  !SWRITE(UNIT_stdOut,'(A)') 'Time Update success!'
 #else
   t            = t            + dt
 #endif /*LTS*/
   ! Perform analysis at the end of the RK loop
   CALL AnalyzeTimeStep()
-  !SWRITE(UNIT_stdOut,'(A)') 'AnalyzeTimeStep success!'
 
+#if LTS_ENABLED
+  CALL PrintStatusLine(t,t_LTS_max,dt,dt_LTS_max,tStart,tEnd,iter,maxIter)
+#else
   CALL PrintStatusLine(t,dt,tStart,tEnd,iter,maxIter)
+#endif /*LTS*/
 
   IF(doFinalize) EXIT
-  !SWRITE(UNIT_stdOut,'(A)') 'RK cycle success!'
 END DO
 
 END SUBROUTINE TimeDisc

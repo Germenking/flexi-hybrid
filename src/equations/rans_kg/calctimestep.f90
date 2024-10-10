@@ -96,8 +96,11 @@ END DO
 END SUBROUTINE
 
 
+
+
+#if LTS_ENABLED
 !==================================================================================================================================
-!> Compute the time step for the current update of U for the NS-kg Equations
+!> Compute the time step for the current update of U for the NS-kg Equations, LTS mode
 !==================================================================================================================================
 FUNCTION CALCTIMESTEP(errType) 
 ! MODULES
@@ -107,9 +110,6 @@ USE MOD_DG_Vars      ,ONLY:U
 USE MOD_EOS_Vars
 USE MOD_Mesh_Vars    ,ONLY:sJ,Metrics_fTilde,Metrics_gTilde,Elem_xGP,nElems
 USE MOD_TimeDisc_Vars,ONLY:CFLScale,ViscousTimeStep,dtElem
-!#if LTS_ENABLED
-!USE MOD_Mesh_Vars    ,ONLY:dt_LTS
-!#endif
 USE MOD_Equation_Vars,ONLY:Cmu,invSigmaK
 #ifndef GNU
 USE, INTRINSIC :: IEEE_ARITHMETIC,ONLY:IEEE_IS_NAN
@@ -155,19 +155,19 @@ errType=0
 
 !WRITE(*,*) 'Calctimestep starts!'
 
-#if LTS_ENABLED
+!#if LTS_ENABLED
 ALLOCATE (CalcTimeStep(nElems))
-#else
-ALLOCATE (CalcTimeStep(1))
-#endif /*LTS*/
+!#else
+!ALLOCATE (CalcTimeStep(1))
+!#endif /*LTS*/
 
 TimeStepConv=HUGE(1.)
 TimeStepVisc=HUGE(1.)
 DO iElem=1,nElems
-#if LTS_ENABLED  
+!#if LTS_ENABLED  
   TimeStepConv=HUGE(1.)
   TimeStepVisc=HUGE(1.)
-#endif /*LTS*/
+!#endif /*LTS*/
 !if LTS_ENABLED, update the time step for each element
   FVE = FV_Elems(iElem)
   Max_Lambda=0.
@@ -244,7 +244,7 @@ DO iElem=1,nElems
   END IF
 #endif /* PARABOLIC*/
 
-#if LTS_ENABLED
+!#if LTS_ENABLED
   TimeStep(1)=TimeStepConv
   TimeStep(2)=TimeStepVisc
 #if USE_MPI
@@ -254,19 +254,167 @@ DO iElem=1,nElems
     ViscousTimeStep=(TimeStep(2) .LT. TimeStep(1))
   ENDIF
   CalcTimeStep(iElem)=MINVAL(TimeStep(1:2))
-#endif /*LTS*/
+!#endif /*LTS*/
 
 END DO ! iElem=1,nElems
 
 !WRITE(*,*) 'Calctimestep cycle ends!'
 
-#if LTS_ENABLED
+!#if LTS_ENABLED
 CALL MPI_ALLREDUCE(MPI_IN_PLACE, TimeStep(3), 1, MPI_DOUBLE_PRECISION, MPI_MIN, MPI_COMM_FLEXI, iError)
 errType=INT(-TimeStep(3))
 !WRITE(*,*) 'errType updated!'
-#endif /*LTS*/
+!#endif /*LTS*/
 
-#ifndef LTS_ENABLED
+!#ifndef LTS_ENABLED
+!TimeStep(1)=TimeStepConv
+!TimeStep(2)=TimeStepVisc
+!#if USE_MPI
+!TimeStep(3)=-errType ! reduce with timestep, minus due to MPI_MIN
+!CALL MPI_ALLREDUCE(MPI_IN_PLACE,TimeStep,3,MPI_DOUBLE_PRECISION,MPI_MIN,MPI_COMM_FLEXI,iError)
+!errType=INT(-TimeStep(3))
+!#endif /*USE_MPI*/
+!ViscousTimeStep=(TimeStep(2) .LT. TimeStep(1))
+!CalcTimeStep(1)=MINVAL(TimeStep(1:2)) ! CalcTimeStep only has 1 elemnt in the array without LTS function
+!#endif /*no_LTS*/
+END FUNCTION CALCTIMESTEP
+
+#else
+
+!==================================================================================================================================
+!> Compute the time step for the current update of U for the NS-kg Equations, GTS mode
+!==================================================================================================================================
+FUNCTION CALCTIMESTEP(errType)
+! MODULES
+USE MOD_Globals
+USE MOD_PreProc
+USE MOD_DG_Vars      ,ONLY:U
+USE MOD_EOS_Vars
+USE MOD_Mesh_Vars    ,ONLY:sJ,Metrics_fTilde,Metrics_gTilde,Elem_xGP,nElems
+USE MOD_TimeDisc_Vars,ONLY:CFLScale,ViscousTimeStep,dtElem
+USE MOD_Equation_Vars,ONLY:Cmu,invSigmaK
+#ifndef GNU
+USE, INTRINSIC :: IEEE_ARITHMETIC,ONLY:IEEE_IS_NAN
+#endif
+#if PP_dim==3
+USE MOD_Mesh_Vars    ,ONLY:Metrics_hTilde
+#endif
+#if PARABOLIC
+USE MOD_TimeDisc_Vars,ONLY:DFLScale
+USE MOD_Viscosity
+#endif /*PARABOLIC*/
+#if FV_ENABLED
+USE MOD_FV_Vars      ,ONLY: FV_Elems
+#if FV_ENABLED == 2
+USE MOD_FV_Vars      ,ONLY: FV_alpha,FV_alpha_min
+#endif
+#endif
+#if EDDYVISCOSITY
+USE MOD_EddyVisc_Vars, ONLY: muSGS, PrSGS
+#endif
+! IMPLICIT VARIABLE HANDLING
+IMPLICIT NONE
+!----------------------------------------------------------------------------------------------------------------------------------
+! INPUT/OUTPUT VARIABLES
+REAL                         :: CalcTimeStep
+INTEGER,INTENT(OUT)          :: errType
+!----------------------------------------------------------------------------------------------------------------------------------
+! LOCAL VARIABLES
+INTEGER                      :: i,j,k,iElem
+REAL,DIMENSION(PP_2Var)      :: UE
+REAL                         :: TimeStepConv, TimeStepVisc, TimeStep(3)
+REAL                         :: Max_Lambda(3),c,vsJ(3)
+#if EDDYVISCOSITY
+REAL                         :: muSGSmax
+#endif
+#if PARABOLIC
+REAL                         :: Max_Lambda_v(3),mu,prim(PP_nVarPrim)
+#endif /*PARABOLIC*/
+INTEGER                      :: FVE
+REAL                         :: muTOrig
+!==================================================================================================================================
+errType=0
+
+TimeStepConv=HUGE(1.)
+TimeStepVisc=HUGE(1.)
+DO iElem=1,nElems
+  FVE = FV_Elems(iElem)
+  Max_Lambda=0.
+#if PARABOLIC
+  Max_Lambda_v=0.
+#endif /*PARABOLIC*/
+#if EDDYVISCOSITY
+  muSGSMax = MAXVAL(muSGS(1,:,:,:,iElem))
+#endif
+  DO k=0,PP_NZ; DO j=0,PP_N; DO i=0,PP_N
+    ! TODO: ATTENTION: Temperature of UE not filled!!!
+    UE(EXT_CONS)=U(:,i,j,k,iElem)
+    UE(EXT_SRHO)=1./UE(EXT_DENS)
+    UE(EXT_VELV)=VELOCITY_HE(UE)
+    UE(EXT_PRES)=PRESSURE_HE(UE)
+    UE(EXT_TEMP)=TEMPERATURE_HE(UE)
+    UE(EXT_TKE )=U(RHOK,i,j,k,iElem)*UE(EXT_SRHO)
+    UE(EXT_OMG )=U(RHOG,i,j,k,iElem)*UE(EXT_SRHO)
+    ! Convective Eigenvalues
+    IF(IEEE_IS_NAN(UE(EXT_DENS)))THEN
+      ERRWRITE(*,'(A,3ES16.7)')'Density NaN, Position= ',Elem_xGP(:,i,j,k,iElem)
+      errType=1
+    END IF
+    c=SPEEDOFSOUND_HE(UE)
+    vsJ=UE(EXT_VELV)*sJ(i,j,k,iElem,FVE)
+    Max_Lambda(1)=MAX(Max_Lambda(1),ABS(SUM(Metrics_fTilde(:,i,j,k,iElem,FVE)*vsJ)) + &
+                                              c*MetricsAdv(1,i,j,k,iElem,FVE))
+    Max_Lambda(2)=MAX(Max_Lambda(2),ABS(SUM(Metrics_gTilde(:,i,j,k,iElem,FVE)*vsJ)) + &
+                                              c*MetricsAdv(2,i,j,k,iElem,FVE))
+#if PP_dim==3
+    Max_Lambda(3)=MAX(Max_Lambda(3),ABS(SUM(Metrics_hTilde(:,i,j,k,iElem,FVE)*vsJ)) + &
+                                              c*MetricsAdv(3,i,j,k,iElem,FVE))
+#endif
+#if PARABOLIC
+    ! Viscous Eigenvalues
+    prim = UE(EXT_PRIM)
+    mu=VISCOSITY_PRIM(prim)
+    muTOrig = MIN( Cmu * UE(EXT_DENS) * MAX(UE(EXT_TKE),1.e-16) * MAX(UE(EXT_OMG),1.e-16)**2, 10000. * mu) 
+#if DECOUPLE==0
+    mu = mu + MAX( MAX(muSGSMax, invSigmaK * muTOrig), muSGSMax/PrSGS)
+#endif
+    Max_Lambda_v=MAX(Max_Lambda_v,mu*UE(EXT_SRHO)*MetricsVisc(:,i,j,k,iElem,FVE))
+#endif /* PARABOLIC*/
+  END DO; END DO; END DO ! i,j,k
+
+#if FV_ENABLED >= 2
+  dtElem(iElem)=MERGE(CFLScale(0),CFLScale(1),FV_alpha(iElem).LE.FV_alpha_min)*2./SUM(Max_Lambda)
+#else
+  dtElem(iElem)=CFLScale(FVE)*2./SUM(Max_Lambda)
+#endif
+  TimeStepConv=MIN(TimeStepConv,dtElem(iElem))
+  IF(IEEE_IS_NAN(TimeStepConv))THEN
+    ERRWRITE(*,'(A,I0,A,I0)')'Convective timestep NaN on proc',myRank,' for element: ',iElem
+    ERRWRITE(*,'(A,3ES16.7)')'Position: Elem_xGP(:1,1,1,iElem)=',Elem_xGP(:,1,1,1,iElem)
+    ERRWRITE(*,*)'dt_conv=',TimeStepConv,' dt_visc=',TimeStepVisc
+    errType=2
+  END IF
+
+#if PARABOLIC
+  IF(SUM(Max_Lambda_v).GT.0.)THEN
+#if FV_ENABLED == 2  || FV_ENABLED == 3
+    dtElem(iElem)=MIN(dtElem(iElem),MINVAL(DFLScale(:))*4./SUM(Max_Lambda_v))
+    TimeStepVisc= MIN(TimeStepVisc, MINVAL(DFLScale(:))*4./SUM(Max_Lambda_v))
+#else
+    dtElem(iElem)=MIN(dtElem(iElem),DFLScale(FVE)*4./SUM(Max_Lambda_v))
+    TimeStepVisc= MIN(TimeStepVisc, DFLScale(FVE)*4./SUM(Max_Lambda_v))
+#endif
+  END IF
+  IF(IEEE_IS_NAN(TimeStepVisc))THEN
+    ERRWRITE(*,'(A,I0,A,I0)')'Viscous timestep NaN on proc ',myRank,' for element: ', iElem
+    ERRWRITE(*,'(A,3ES16.7)')'Position: Elem_xGP(:1,1,1,iElem)=',Elem_xGP(:,1,1,1,iElem)
+    ERRWRITE(*,*)'dt_visc=',TimeStepVisc,' dt_conv=',TimeStepConv
+    errType=3
+  END IF
+#endif /* PARABOLIC*/
+
+END DO ! iElem=1,nElems
+
 TimeStep(1)=TimeStepConv
 TimeStep(2)=TimeStepVisc
 #if USE_MPI
@@ -275,14 +423,11 @@ CALL MPI_ALLREDUCE(MPI_IN_PLACE,TimeStep,3,MPI_DOUBLE_PRECISION,MPI_MIN,MPI_COMM
 errType=INT(-TimeStep(3))
 #endif /*USE_MPI*/
 ViscousTimeStep=(TimeStep(2) .LT. TimeStep(1))
-CalcTimeStep(1)=MINVAL(TimeStep(1:2)) ! CalcTimeStep only has 1 elemnt in the array without LTS function
-#endif /*no_LTS*/
-
-
-
-
+CalcTimeStep=MINVAL(TimeStep(1:2))
 
 END FUNCTION CALCTIMESTEP
+
+#endif /*LTS*/
 
 
 

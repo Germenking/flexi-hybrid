@@ -58,6 +58,9 @@ END INTERFACE
 
 INTERFACE PrintStatusLine
   MODULE PROCEDURE PrintStatusLine
+#if LTS_ENABLED
+  MODULE PROCEDURE PrintStatusLine_LTS
+#endif /*LTS*/
 END INTERFACE
 
 INTERFACE Visualize
@@ -244,25 +247,16 @@ END IF
 
 END SUBROUTINE PrintPercentage
 
-
 !==================================================================================================================================
-!> Displays the actual status of the simulation and counts the amount of FV elements
+!> Displays the actual status of the simulation and counts the amount of FV elements, GTS mode
 !==================================================================================================================================
-!#if LTS_ENABLED
-!SUBROUTINE PrintStatusLine(t,dt,t_LTS,dt_LTS,tStart,tEnd,iter,maxIter,doETA)
-!#else
 SUBROUTINE PrintStatusLine(t,dt,tStart,tEnd,iter,maxIter,doETA)
-!#endif
-
 ! MODULES                                                                                                                          !
 USE MOD_Globals
 USE MOD_PreProc
 USE MOD_Output_Vars   ,ONLY: doPrintStatusLine
 USE MOD_Restart_Vars  ,ONLY: DoRestart,RestartTime
 USE MOD_TimeDisc_Vars ,ONLY: time_start
-#if LTS_ENABLED
-USE MOD_TimeDisc_Vars ,ONLY: dt_LTS, t_LTS !Warning: This is not safe for the program, only for test 
-#endif
 #if (FV_ENABLED == 1) || PP_LIMITER
 USE MOD_Mesh_Vars     ,ONLY: nGlobalElems
 #endif
@@ -283,10 +277,6 @@ IMPLICIT NONE
 ! INPUT / OUTPUT VARIABLES
 REAL,INTENT(IN)             :: t      !< current simulation time
 REAL,INTENT(IN)             :: dt     !< current time step
-!#if LTS_ENABLED
-!REAL,INTENT(IN)             :: t_LTS(:)   !current local simulation time
-!REAL,INTENT(IN)             :: dt_LTS(:)  !current local time step
-!#endif 
 REAL,INTENT(IN)             :: tStart !< start time of simulation
 REAL,INTENT(IN)             :: tEnd   !< end time of simulation
 INTEGER(KIND=8),INTENT(IN)  :: iter    !< current iteration
@@ -321,12 +311,6 @@ REAL              :: FV_alpha_range(2)
 INTEGER(KIND=8)   :: PPcounter
 REAL              :: PP_percent
 #endif /*PP_LIMITER*/
-#if LTS_ENABLED
-REAL              :: tmax
-REAL              :: tmin
-REAL              :: dtmax
-REAL              :: dtmin
-#endif /*LTS*/
 !==================================================================================================================================
 #if FV_ENABLED == 1
 FVcounter      = INT(SUM(FV_Elems),KIND=8)
@@ -420,31 +404,8 @@ END IF
 
 IF (.NOT.MPIRoot) RETURN
 
-#if LTS_ENABLED
-WRITE(UNIT_stdOut,'(A,A)', ADVANCE='YES') 'Local time stepping is enabled!', ACHAR(13)
+!WRITE(UNIT_stdOut,'(A,A)', ADVANCE='YES') 'Standard output format', ACHAR(13)
 
-tmin = t
-tmax = MAXVAL(t_LTS)
-dtmin = dt
-dtmax = MAXVAL(dt_LTS)
-
-IF (mins.LT.1 .AND. hours.EQ.0 .AND. days.EQ.0) THEN
-    WRITE(UNIT_stdOut,'(A,E10.4,A,E10.4,A,A)',ADVANCE='YES')                               &
-    '  Minimum local time = ', tmin,'  Minimum  dt = ', dtmin
-    WRITE(UNIT_stdOut,'(A,E10.4,A,E10.4,A,A,A3,A,A1,A,A3,F6.2,A3,A1)',ADVANCE=tmpString)                               &
-    '  Maximum local time = ', tmax,'  Maximum  dt = ', dtmax, ' ', ' ETA [d:h:m]:<1 min remaining',' |',                                          &
-    REPEAT('=',MAX(CEILING(percent*barWidth/100.)-1,0)),'>',REPEAT(' ',barWidth-MAX(CEILING(percent*barWidth/100.),0)),'| [',percent,'%] ',&
-    ACHAR(13) ! ACHAR(13) is carriage return
-  ELSE
-    WRITE(UNIT_stdOut,'(A,E10.4,A,E10.4,A,A)',ADVANCE='YES')                               &
-    '  Minimum local time = ', tmin,'  Minimum  dt = ', dtmin
-    WRITE(UNIT_stdOut,'(A,E10.4,A,E10.4,A,A,I4,A1,I0.2,A1,I0.2,A1,I0.2,A7,A,A1,A,A3,F6.2,A3,A1)',ADVANCE=tmpString)    &
-    '  Maximum local time = ', tmax,'  Maximum  dt = ', dtmax, ' ', ' ETA [d:h:m]',INT(days),':',INT(hours),':',INT(mins),':',INT(secs),' |',      &
-    REPEAT('=',MAX(CEILING(percent*barWidth/100.)-1,0)),'>',REPEAT(' ',barWidth-MAX(CEILING(percent*barWidth/100.),0)),'| [',percent,'%] ',&
-    ACHAR(13) ! ACHAR(13) is carriage return
-END IF
-
-#else
 IF (mins.LT.1 .AND. hours.EQ.0 .AND. days.EQ.0) THEN
     WRITE(UNIT_stdOut,'(A,E10.4,A,E10.4,A,A,A3,A,A1,A,A3,F6.2,A3,A1)',ADVANCE=tmpString)                               &
     '   Time = ', t,'  dt = ', dt, ' ', ' ETA [d:h:m]:<1 min remaining',' |',                                          &
@@ -456,13 +417,206 @@ IF (mins.LT.1 .AND. hours.EQ.0 .AND. days.EQ.0) THEN
     REPEAT('=',MAX(CEILING(percent*barWidth/100.)-1,0)),'>',REPEAT(' ',barWidth-MAX(CEILING(percent*barWidth/100.),0)),'| [',percent,'%] ',&
     ACHAR(13) ! ACHAR(13) is carriage return
 END IF
-#endif
-
 #ifdef INTEL
  CLOSE(UNIT_stdOut)
 #endif /*INTEL*/
 
 END SUBROUTINE PrintStatusLine
+
+!==================================================================================================================================
+!> Displays the actual status of the simulation and counts the amount of FV elements, LTS mode (contains extra information)
+!==================================================================================================================================
+#if LTS_ENABLED
+SUBROUTINE PrintStatusLine_LTS(t,t_LTS_max,dt,dt_LTS_max,tStart,tEnd,iter,maxIter,doETA)
+
+! MODULES                                                                                                                          !
+USE MOD_Globals
+USE MOD_PreProc
+USE MOD_Output_Vars   ,ONLY: doPrintStatusLine
+USE MOD_Restart_Vars  ,ONLY: DoRestart,RestartTime
+USE MOD_TimeDisc_Vars ,ONLY: time_start
+!#if LTS_ENABLED
+!USE MOD_TimeDisc_Vars ,ONLY: dt_LTS, t_LTS !Warning: This is not safe for the program, only for test 
+!#endif
+#if (FV_ENABLED == 1) || PP_LIMITER
+USE MOD_Mesh_Vars     ,ONLY: nGlobalElems
+#endif
+#if FV_ENABLED == 1
+USE MOD_Analyze_Vars  ,ONLY: totalFV_nElems
+USE MOD_FV_Vars       ,ONLY: FV_Elems
+#elif FV_ENABLED == 2 || FV_ENABLED == 3
+USE MOD_Analyze_Vars  ,ONLY: FV_totalAlpha
+USE MOD_FV_Vars       ,ONLY: FV_alpha
+#endif /*FV_ENABLED*/
+#if PP_LIMITER
+USE MOD_Analyze_Vars, ONLY: totalPP_nElems
+USE MOD_Filter_Vars , ONLY: PP_Elems
+#endif /*PP_LIMITER*/
+! IMPLICIT VARIABLE HANDLING
+IMPLICIT NONE
+!----------------------------------------------------------------------------------------------------------------------------------!
+! INPUT / OUTPUT VARIABLES
+REAL,INTENT(IN)             :: t      !< mimimum current local simulation time for LTS mode
+REAL,INTENT(IN)             :: dt     !< minimum current local time step for LTS mode
+REAL,INTENT(IN)             :: t_LTS_max   !maximum current local simulation time for LTS mode
+REAL,INTENT(IN)             :: dt_LTS_max  !maximum current local time step for LTS mode
+REAL,INTENT(IN)             :: tStart !< start time of simulation
+REAL,INTENT(IN)             :: tEnd   !< end time of simulation
+INTEGER(KIND=8),INTENT(IN)  :: iter    !< current iteration
+INTEGER(KIND=8),INTENT(IN)  :: maxIter !< end iteration of simulation
+LOGICAL,INTENT(IN),OPTIONAL :: doETA !< flag to print ETA without carriage return
+!----------------------------------------------------------------------------------------------------------------------------------
+! LOCAL VARIABLES
+LOGICAL           :: doETA_loc
+REAL              :: percent,percent_time,percent_iter,percent_ETA
+REAL              :: time_remaining,mins,secs,hours,days
+CHARACTER(LEN=3)  :: tmpString
+#if !FV_ENABLED && PP_LIMITER
+INTEGER,PARAMETER :: barWidth = 39
+#elif (FV_ENABLED==1) &&  PP_LIMITER
+INTEGER,PARAMETER :: barWidth = 27
+#elif (FV_ENABLED==1) && !PP_LIMITER
+INTEGER,PARAMETER :: barWidth = 39
+#elif (FV_ENABLED==2 || FV_ENABLED == 3) &&  PP_LIMITER
+INTEGER,PARAMETER :: barWidth = 20
+#elif (FV_ENABLED==2 || FV_ENABLED == 3) && !PP_LIMITER
+INTEGER,PARAMETER :: barWidth = 32
+#else
+INTEGER,PARAMETER :: barWidth = 51
+#endif
+#if FV_ENABLED == 1
+INTEGER(KIND=8)   :: FVcounter
+REAL              :: FV_percent
+#elif FV_ENABLED == 2 || FV_ENABLED == 3
+REAL              :: FV_alpha_range(2)
+#endif /*FV_ENABLED*/
+#if PP_LIMITER
+INTEGER(KIND=8)   :: PPcounter
+REAL              :: PP_percent
+#endif /*PP_LIMITER*/
+!==================================================================================================================================
+#if FV_ENABLED == 1
+FVcounter      = INT(SUM(FV_Elems),KIND=8)
+totalFV_nElems = totalFV_nElems + FVcounter ! counter for output of FV amount during analyze
+#elif FV_ENABLED == 2 || FV_ENABLED == 3
+FV_alpha_range(1) = MINVAL(FV_alpha)
+FV_alpha_range(2) = MAXVAL(FV_alpha)
+FV_totalAlpha    = FV_totalAlpha + SUM(FV_alpha)
+#endif /*FV_ENABLED*/
+#if PP_LIMITER
+PPcounter      = INT(SUM(PP_Elems),KIND=8)
+totalPP_nElems = totalPP_nElems + PPcounter ! counter for output of FV amount during analyze
+#endif
+
+IF (PRESENT(doETA)) THEN
+  doETA_loc = doETA
+ELSE
+  doETA_loc = .FALSE.
+END IF
+
+IF(.NOT.doPrintStatusLine .AND. .NOT.doETA_loc) RETURN
+
+#if FV_ENABLED && USE_MPI
+IF (MPIRoot) THEN
+#if FV_ENABLED == 1
+  CALL MPI_REDUCE(MPI_IN_PLACE    ,FVcounter       ,1,MPI_INTEGER8        ,MPI_SUM,0,MPI_COMM_FLEXI,iError)
+#elif FV_ENABLED == 2 || FV_ENABLED == 3
+  CALL MPI_REDUCE(MPI_IN_PLACE    ,FV_alpha_range(1),1,MPI_DOUBLE_PRECISION,MPI_MIN,0,MPI_COMM_FLEXI,iError)
+  CALL MPI_REDUCE(MPI_IN_PLACE    ,FV_alpha_range(2),1,MPI_DOUBLE_PRECISION,MPI_MAX,0,MPI_COMM_FLEXI,iError)
+#endif /*FV_ENABLED*/
+ELSE
+#if FV_ENABLED == 1
+  CALL MPI_REDUCE(FVcounter       ,0               ,1,MPI_INTEGER8        ,MPI_SUM,0,MPI_COMM_FLEXI,iError)
+#elif FV_ENABLED == 2 || FV_ENABLED == 3
+  CALL MPI_REDUCE(FV_alpha_range(1),0               ,1,MPI_DOUBLE_PRECISION,MPI_MIN,0,MPI_COMM_FLEXI,iError)
+  CALL MPI_REDUCE(FV_alpha_range(2),0               ,1,MPI_DOUBLE_PRECISION,MPI_MAX,0,MPI_COMM_FLEXI,iError)
+#endif /*FV_ENABLED*/
+END IF
+#endif
+
+#if PP_LIMITER && USE_MPI
+IF (MPIRoot) THEN
+  CALL MPI_REDUCE(MPI_IN_PLACE,PPcounter,1,MPI_INTEGER8,MPI_SUM,0,MPI_COMM_FLEXI,iError)
+ELSE
+  CALL MPI_REDUCE(PPcounter,0           ,1,MPI_INTEGER8,MPI_SUM,0,MPI_COMM_FLEXI,iError)
+END IF
+#endif /*PP_LIMITER && USE_MPI*/
+
+IF(MPIRoot)THEN
+#ifdef INTEL
+  OPEN(UNIT_stdOut,CARRIAGECONTROL='fortran')
+#endif
+  percent_time = (t-tStart) / (tEnd-tStart)
+  percent_iter = REAL(iter) / REAL(maxIter)
+  percent      = MAX(percent_time,percent_iter)
+
+  ! Calculate ETA with percent of current run
+  ASSOCIATE(tBegin => MERGE(RestartTime,tStart,DoRestart))
+  percent_ETA  = (t-tBegin) / (tEnd-tBegin)
+  percent_ETA  = MAX(percent_ETA,percent_iter)
+  END ASSOCIATE
+
+  CALL CPU_TIME(time_remaining)
+  time_remaining = time_remaining - time_start
+  IF (percent_ETA.GT.0.0) time_remaining = time_remaining/percent_ETA - time_remaining
+  percent = percent*100.
+  secs = MOD(time_remaining,60.)
+  time_remaining = time_remaining / 60
+  mins = MOD(time_remaining,60.)
+  time_remaining = time_remaining / 60
+  hours = MOD(time_remaining,24.)
+  days = time_remaining / 24
+
+#if FV_ENABLED == 1
+  FV_percent = REAL(FVcounter) / REAL(nGlobalElems) * 100.
+  WRITE(UNIT_stdOut,'(F7.2,A5)',ADVANCE='NO') FV_percent, '% FV,'
+#elif FV_ENABLED == 2 || FV_ENABLED == 3
+  WRITE(UNIT_stdOut,'(A7,F5.3,A1,F5.3,A)',ADVANCE='NO') ' aFV = ',FV_alpha_range(1),'-',FV_alpha_range(2),','
+#endif /*FV_ENABLED*/
+
+#if PP_LIMITER
+  PP_percent = REAL(PPcounter) / REAL(nGlobalElems) * 100.
+  WRITE(UNIT_stdOut,'(F7.2,A5)',ADVANCE='NO') PP_percent, '% PP,'
+#endif /*PP_LIMITER*/
+
+  ! Status line or standard output
+  IF (PRESENT(doETA)) THEN; tmpString = 'YES'
+  ELSE                    ; tmpString = 'NO'
+  ENDIF
+END IF
+
+IF (.NOT.MPIRoot) RETURN
+
+
+WRITE(UNIT_stdOut,'(A,A)', ADVANCE='YES') 'Local time stepping is enabled!', ACHAR(13)
+
+!tmin = t
+!tmax = MAXVAL(t_LTS)
+!dtmin = dt
+!dtmax = MAXVAL(dt_LTS)
+
+IF (mins.LT.1 .AND. hours.EQ.0 .AND. days.EQ.0) THEN
+    WRITE(UNIT_stdOut,'(A,E10.4,A,E10.4,A,A)',ADVANCE='YES')                               &
+    '  Minimum local time = ', t,'  Minimum  dt = ', dt
+    WRITE(UNIT_stdOut,'(A,E10.4,A,E10.4,A,A,A3,A,A1,A,A3,F6.2,A3,A1)',ADVANCE=tmpString)                               &
+    '  Maximum local time = ', t_LTS_max,'  Maximum  dt = ', dt_LTS_max, ' ', ' ETA [d:h:m]:<1 min remaining',' |',                                          &
+    REPEAT('=',MAX(CEILING(percent*barWidth/100.)-1,0)),'>',REPEAT(' ',barWidth-MAX(CEILING(percent*barWidth/100.),0)),'| [',percent,'%] ',&
+    ACHAR(13) ! ACHAR(13) is carriage return
+  ELSE
+    WRITE(UNIT_stdOut,'(A,E10.4,A,E10.4,A,A)',ADVANCE='YES')                               &
+    '  Minimum local time = ', t,'  Minimum  dt = ', dt
+    WRITE(UNIT_stdOut,'(A,E10.4,A,E10.4,A,A,I4,A1,I0.2,A1,I0.2,A1,I0.2,A7,A,A1,A,A3,F6.2,A3,A1)',ADVANCE=tmpString)    &
+    '  Maximum local time = ', t_LTS_max,'  Maximum  dt = ', dt_LTS_max, ' ', ' ETA [d:h:m]',INT(days),':',INT(hours),':',INT(mins),':',INT(secs),' |',      &
+    REPEAT('=',MAX(CEILING(percent*barWidth/100.)-1,0)),'>',REPEAT(' ',barWidth-MAX(CEILING(percent*barWidth/100.),0)),'| [',percent,'%] ',&
+    ACHAR(13) ! ACHAR(13) is carriage return
+END IF
+
+#ifdef INTEL
+ CLOSE(UNIT_stdOut)
+#endif /*INTEL*/
+
+END SUBROUTINE PrintStatusLine_LTS
+#endif /*LTS*/
 
 
 !==================================================================================================================================

@@ -214,7 +214,7 @@ SUBROUTINE InitTimeStep()
 USE MOD_Globals
 USE MOD_TimeDisc_Vars       ,ONLY: t,tAnalyze,tEnd,dt,dt_min,dt_minOld
 #if LTS_ENABLED
-USE MOD_TimeDisc_Vars       ,ONLY: t_LTS,dt_LTS,dt_LTS_min
+USE MOD_TimeDisc_Vars       ,ONLY: t_LTS,dt_LTS,dt_LTS_min,dt_LTS_MAx
 #endif
 USE MOD_TimeDisc_Vars       ,ONLY: ViscousTimeStep,CalcTimeStart,nCalcTimeStep
 USE MOD_TimeDisc_Vars       ,ONLY: doAnalyze,doFinalize
@@ -230,12 +230,13 @@ INTEGER                      :: errType
 !ALLOCATE(dt_LTS(nElems))
 dt_LTS             = EvalInitialTimeStep(errType)
 dt_LTS_min         = MINVAL(dt_LTS)
+dt_LTS_max         = MAXVAL(dt_LTS)
 CALL MPI_ALLREDUCE(MPI_IN_PLACE,dt_LTS_min,1,MPI_DOUBLE_PRECISION,MPI_MIN,MPI_COMM_FLEXI,iError)
+CALL MPI_ALLREDUCE(MPI_IN_PLACE,dt_LTS_max,1,MPI_DOUBLE_PRECISION,MPI_MAX,MPI_COMM_FLEXI,iError)
 dt                 = dt_LTS_min
 #else
-dt                 = MINVAL(EvalInitialTimeStep(errType)) !OUTPUT of EvalInitialTimeStep is an array with 1 element without LTS function
+dt                 = EvalInitialTimeStep(errType) 
 #endif /*LTS*/
-
 
 dt_min(DT_MIN)     = dt
 dt_min(DT_ANALYZE) = tAnalyze-t             ! Time to next analysis, put in extra variable so number does not change due to numerical errors
@@ -293,7 +294,7 @@ USE MOD_HDF5_Output         ,ONLY: WriteState
 USE MOD_Mesh_Vars           ,ONLY: MeshFile
 #if LTS_ENABLED
 USE MOD_Mesh_Vars           ,ONLY: nElems
-USE MOD_TimeDisc_Vars       ,ONLY: t_LTS,dt_LTS, dt_LTS_min
+USE MOD_TimeDisc_Vars       ,ONLY: t_LTS,dt_LTS, dt_LTS_min, dt_LTS_max
 #endif /*LTS*/
 USE MOD_TimeDisc_Vars       ,ONLY: t,tAnalyze,tEnd,dt,dt_min,dt_minOld
 USE MOD_TimeDisc_Vars       ,ONLY: nCalcTimeStep,nCalcTimeStepMax
@@ -319,11 +320,13 @@ END IF
 #if LTS_ENABLED
 dt_LTS             = EvalTimeStep(errType)
 dt_LTS_min         = MINVAL(dt_LTS)
+dt_LTS_max         = MAXVAL(dt_LTS)
 CALL MPI_ALLREDUCE(MPI_IN_PLACE,dt_LTS_min,1,MPI_DOUBLE_PRECISION,MPI_MIN,MPI_COMM_FLEXI,iError)
+CALL MPI_ALLREDUCE(MPI_IN_PLACE,dt_LTS_max,1,MPI_DOUBLE_PRECISION,MPI_MAX,MPI_COMM_FLEXI,iError)
 dt                 = dt_LTS_min
 !WRITE(*,*) 'LTS initial dt done!'
 #else
-dt                 = MINVAL(EvalTimeStep(errType))       !OUTPUT of EvalInitialTimeStep is an array with 1 element without LTS function
+dt                 = EvalTimeStep(errType)     
 #endif /*LTS*/
 
 dt_min(DT_MIN)     = dt
@@ -335,7 +338,8 @@ IF (dt.EQ.dt_min(DT_ANALYZE))       doAnalyze  = .TRUE.
 IF (dt.EQ.dt_min(DT_END    )) THEN; doAnalyze  = .TRUE.; doFinalize = .TRUE.; END IF
 dt                 = MINVAL(dt_min,MASK=dt_min.GT.0)
 #if LTS_ENABLED
-IF ((dt_min(DT_ANALYZE).LT.dt_min(DT_MIN)).OR.(dt_min(DT_END).LT.dt_min(DT_MIN))) dt_LTS  =  dt 
+!IF ((dt_min(DT_ANALYZE).LT.dt_min(DT_MIN)).OR.(dt_min(DT_END).LT.dt_min(DT_MIN))) dt_LTS  =  dt 
+IF ((dt_min(DT_END).LT.dt_min(DT_MIN))) dt_LTS  =  dt 
 #endif /*LTS*/
 
 
@@ -355,7 +359,7 @@ END IF
 IF(dt_min(DT_ANALYZE)-dt.LT.dt/100.0 .AND. dt_min(DT_ANALYZE).GT.0) THEN
   dt = dt_min(DT_ANALYZE)
 #if LTS_ENABLED
-  dt_LTS     = dt
+  !dt_LTS     = dt
 #endif /*LTS*/
   doAnalyze  = .TRUE.
 END IF
@@ -507,7 +511,11 @@ USE MOD_Mesh_Vars           ,ONLY: nElems
 IMPLICIT NONE
 !----------------------------------------------------------------------------------------------------------------------------------
 ! INPUT/OUTPUT VARIABLES
+#if LTS_ENABLED
 REAL,ALLOCATABLE             :: dt(:)
+#else
+REAL                         :: dt
+#endif /*LTS*/
 REAL                         :: dt_min = 0.
 INTEGER,INTENT(OUT)          :: errType
 !----------------------------------------------------------------------------------------------------------------------------------
@@ -520,18 +528,15 @@ nDtLimited    = 0
 
 #if LTS_ENABLED
 ALLOCATE(dt(nELems))         
-#else
-ALLOCATE(dt(1))
 #endif /*LTS*/
 
-#if EQNSYSNR==4
-dt            = CalcTimeStep(errType)  !output of CalcTimeStep is an array for RANS kg system
-#else
-dt(1)         = CalcTimeStep(errType)  !output of CalcTimeStep is a variable for other systems
-#endif  /*RANS_kg*/
-!Only CalcTimeStep of RANS kg system outputs an array  
+dt            = CalcTimeStep(errType)  !Noting that for RANS kg + LTS, output of CalcTimeStep is an array
 
+#if LTS_ENABLED
 dt_min        = MINVAL(dt)
+#else
+dt_min        = dt
+#endif /*LTS*/
 
 dt_analyzemin = MIN(dt_analyzemin,dt_min)
 IF (dt_min.LT.dt_dynmin) THEN
@@ -563,7 +568,11 @@ USE MOD_TimeDisc_Vars       ,ONLY: dt_kill,dt_dynmin,t,dt_analyzemin,dtElem,nDtL
 IMPLICIT NONE
 !----------------------------------------------------------------------------------------------------------------------------------
 ! INPUT/OUTPUT VARIABLES
+#if LTS_ENABLED
 REAL,ALLOCATABLE             :: dt(:)
+#else
+REAL                         :: dt
+#endif /*LTS*/
 REAL                         :: dt_min
 INTEGER,INTENT(OUT)          :: errType
 !----------------------------------------------------------------------------------------------------------------------------------
@@ -571,18 +580,15 @@ INTEGER,INTENT(OUT)          :: errType
 !==================================================================================================================================
 #if LTS_ENABLED
 ALLOCATE(dt(nELems))
-#else
-ALLOCATE(dt(1))
 #endif /*LTS*/
 
-#if EQNSYSNR==4
-dt            = CalcTimeStep(errType)  !output of CalcTimeStep is an array for RANS kg system
-#else
-dt(1)         = CalcTimeStep(errType)  !output of CalcTimeStep is a variable for other systems
-#endif  /*RANS_kg*/
-!Only CalcTimeStep of RANS kg system outputs an array
+dt            = CalcTimeStep(errType)  !Noting that for RANS kg + LTS, output of CalcTimeStep is an array
 
+#if LTS_ENABLED
 dt_min        = MINVAL(dt)
+#else
+dt_min        = dt
+#endif /*LTS*/
 
 dt_analyzemin = MIN(dt_analyzemin,dt_min)
 IF (dt_min.LT.dt_dynmin) THEN

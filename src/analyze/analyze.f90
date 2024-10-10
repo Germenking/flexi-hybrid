@@ -302,6 +302,9 @@ USE MOD_Mesh_Vars,          ONLY: nGlobalElems
 USE MOD_Output,             ONLY: OutputToFile,PrintStatusLine
 USE MOD_Output_Vars,        ONLY: ProjectName
 USE MOD_TimeDisc_Vars,      ONLY: dt,tStart,tEnd,maxIter
+#if LTS_ENABLED
+USE MOD_TimeDisc_Vars,      ONLY: dt_LTS_max, t_LTS_max
+#endif 
 USE MOD_Restart_Vars,       ONLY: RestartTime
 ! IMPLICIT VARIABLE HANDLING
 IMPLICIT NONE
@@ -341,7 +344,11 @@ CALL Benchmarking()
 
 IF(Time.GT.RestartTime) THEN
   SWRITE(UNIT_stdOut,'(132("-"))')
+#if LTS_ENABLED
+  CALL PrintStatusLine(time,t_LTS_max,dt,dt_LTS_max,tStart,tEnd,iter,maxIter,doETA=.TRUE.)
+#else
   CALL PrintStatusLine(time,dt,tStart,tEnd,iter,maxIter,doETA=.TRUE.)
+#endif
   SWRITE(UNIT_stdOut,'(132("."))')
   SWRITE(UNIT_stdOut,'(A,A,A,F10.2,A)') ' FLEXI RUNNING ',TRIM(ProjectName),'... [',RunTime,' sec ]'
   SWRITE(UNIT_stdOut,'(132("-"))')
